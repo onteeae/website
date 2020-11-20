@@ -20,41 +20,43 @@ aliases: ['/docs/launching/scalability-philosophy/']
 
 내구성에 대한 새로운 접근방식은 데이터를 여러 기계에, 심지어는 여러 지리적 위치에 복제함으로써 달성된다. 이러한 형태의 내구성은 기기 고장과 다른 장애에 대한 오늘날의 걱정을 해소한다.
 
-Vitess의 많은 워크플로우는 이러한 접근방식을 염두에 두고 구축되었다. 예를 들어, 반동기 복제를 설정하는 것이 가장 권장된다. 이렇게 하면 데이터 손실 없이 마스터가 작동 중단될 때 Vitess가 새 복제본으로 페일오버할 수 있다. Vitess는 또한 당신이 손상된 데이터베이스를 복구하는 것을 피할 것을 권고한다. 대신 최근 백업에서 새로 생성하여 따라잡도록 두십시오.
+Vitess의 많은 작동 방식은 이러한 접근방식을 염두에 두고 구현되었다. 예를 들어, semi-sync Replication을 설정하는 것이 가장 권장된다. 이렇게 하면 마스터가 중단되도 데이터 손실없이 새 복제본으로 fail-over 가능하다. Vitess는 또한 당신이 손상된 데이터베이스를 복구하기 보다, 가장 최근 백업으로 새로이 구축할 것을 권고한다.
 
-복제를 사용하면 디스크 기반 내구성 설정 중 일부를 해제할 수도 있다. 예를 들어 sync_binlog를 끄면 디스크에 대한 IOPS 수가 크게 감소하여 유효 처리량을 높일 수 있다.
+복제에 의존하면 디스크 기반 내구성 설정 중 일부를 해제할 수도 있다. 예를 들어 sync_binlog를 끄면 디스크에 대한 IOPS 수가 크게 감소하여 유효 처리량을 높일 수 있다.
 
+## 일관성 모델
 
-## Durability through replication
+테이블을 샤딩하거나 다른 키 스페이스로 이동하기 전에 애플리케이션을 검증(또는 변경)하여 다음과 변경이 허용되도록 해야한다.
 
-Traditional data storage software treated data as durable as soon as it was flushed to disk. However, this approach is impractical in today’s world of commodity hardware. Such an approach also does not address disaster scenarios.
+* 크로스-샤드 읽기는 서로 일관되지 않을 수 있다. 오히려 크로스 샤드 읽기는 더 비싸기 때문에 샤딩 결정은 그러한 발생(크로스-샤드 읽기)을 최소화하기 위해 시도해야 한다.
+* "best-effort mode"에서는 크로스-샤드 트랜잭션이 중간에 실패하여 부분 커밋이 발생할 수 있다. 대신 분산 환경의 원자성을 보장해주는 "2PC(2-Phase-Commit) 모드" 트랜잭션도 대신 사용할 수 있다. 그러나 이 옵션을 선택하면 쓰기 비용이 약 50% 증가한다.
 
-The new approach to durability is achieved by copying the data to multiple machines, and even geographical locations. This form of durability addresses the modern concerns of device failures and disasters.
+단일 샤드 트랜잭션은 MySQL이 지원하는 것처럼 계속 ACID를 보장한다.
 
-Many of the workflows in Vitess have been built with this approach in mind. For example, turning on semi-sync replication is highly recommended. This allows Vitess to failover to a new replica when a master goes down, with no data loss. Vitess also recommends that you avoid recovering a crashed database. Instead, create a fresh one from a recent backup and let it catch up.
+만약 읽기 전용 코드에서 약간 오래된 데이터를 허용할 수 있다면, 쿼리를 OLTP를 위한 복제 테이블과 OLAP를 위한 읽기전용 테이블로 나누어 나누어 보낼 수 있다. 이렇게 하면 읽기 트래픽을 보다 쉽게 확장할 수 있으며, 지리적으로도 분산시킬 수 있다.
 
-Relying on replication also allows you to loosen some of the disk-based durability settings. For example, you can turn off `sync_binlog`, which greatly reduces the number of IOPS to the disk thereby increasing effective throughput.
-
-## Consistency model
-
-Before sharding or moving tables to different keyspaces, the application needs to be verified (or changed) such that it can tolerate the following changes:
-
-* Cross-shard reads may not be consistent with each other. Conversely, the sharding decision should also attempt to minimize such occurrences because cross-shard reads are more expensive.
-* In "best-effort mode", cross-shard transactions can fail in the middle and result in partial commits. You could instead use "2PC mode" transactions that give you distributed atomic guarantees. However, choosing this option increases the write cost by approximately 50%.
-
-Single shard transactions continue to remain ACID, just like MySQL supports it.
-
-If there are read-only code paths that can tolerate slightly stale data, the queries should be sent to REPLICA tablets for OLTP, and RDONLY tablets for OLAP workloads. This allows you to scale your read traffic more easily, and gives you the ability to distribute them geographically.
-
-This trade-off allows for better throughput at the expense of stale or possibly inconsistent reads, since the reads may be lagging behind the master, as data changes (and possibly with varying lag on different shards). To mitigate this, VTGate servers are capable of monitoring replica lag and can be configured to avoid serving data from instances that are lagging beyond X seconds.
+오래된 읽거나 일관되지 않을 수 있는 읽기를 일부 허용함으로써 더 나은 처리량을 제공한다. 그러한 비일관성은 데이터가 변경됨에 따라(그리고 다른 샤드의 지연으로) 마스터에 뒤처질 수 있기 때문에 발생할 수 있다. 이를 완화하기 위해 VTGate 서버는 복제 지연을 모니터링할 수 있으며 X초 이상 지연된 인스턴스의 데이터가 제공되지 않도록 구성할 수 있다.
 
 For a true snapshot, queries must be sent to the master within a transaction. For read-after-write consistency, reading from the master without a transaction is sufficient.
 
-To summarize, these are the various levels of consistency supported:
+실제 스냅샷을 보려면 트랜잭션 내에서 마스터에 쿼리해야 한다. 읽기 후 쓰기(read-after-write) 일관성을 위해서는 트랜잭션 없이 마스터에서 읽는 것으로 충분하다.
+
+요약하면 다음과 같은 다양한 수준의 일관성이 지원된다.
 
 * `REPLICA/RDONLY` read: Servers can be scaled geographically. Local reads are fast, but can be stale depending on replica lag.
 * `MASTER` read: There is only one worldwide master per shard. Reads coming from remote locations will be subject to network latency and reliability, but the data will be up-to-date (read-after-write consistency). The isolation level is `READ_COMMITTED`.
 * `MASTER` transactions: These exhibit the same properties as MASTER reads. However, you get REPEATABLE_READ consistency and ACID writes for a single shard. Support is underway for cross-shard Atomic transactions.
+
+* "Replica/RDONLY" 읽기: 서버를 지리적으로 확장할 수 있다. 로컬 읽기는 빠르지만 복제본 지연에 따라 오래된 것일 수 있다.
+* '마스터' 읽기: 세계적인 거장 한 명당 단 한 명뿐입니다. 원격 위치에서 전송되는 읽기는 네트워크 지연 시간 및 신뢰성의 영향을 받지만 데이터는 최신(읽기 후 쓰기 일관성)이 될 것이다. 격리 수준은 'READ'이다.커밋됨.
+* '마스터' 트랜잭션: 이것들은 MASTER 읽기와 동일한 속성을 나타낸다. 단, 단일 샤드에 대해 REFITABLE_READ 일관성과 AID 쓰기를 얻을 수 있다. 크로스 샤드 아토믹 거래에 대한 지원이 진행 중이다.
+
+원자성에 대해서는 다음과 같은 수준이 지원된다.
+
+* '싱글': 멀티 db 트랜잭션 허용 안 함
+* '멀티(Multi)': 최선의 노력을 다하는 멀티 db 트랜잭션 커밋.
+* 'TWOPC' : 2PC 커밋을 이용한 멀티 db 트랜잭션
+
 
 As for atomicity, the following levels are supported:
 
