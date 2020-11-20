@@ -37,50 +37,42 @@ Vitess의 많은 작동 방식은 이러한 접근방식을 염두에 두고 구
 
 오래된 읽거나 일관되지 않을 수 있는 읽기를 일부 허용함으로써 더 나은 처리량을 제공한다. 그러한 비일관성은 데이터가 변경됨에 따라(그리고 다른 샤드의 지연으로) 마스터에 뒤처질 수 있기 때문에 발생할 수 있다. 이를 완화하기 위해 VTGate 서버는 복제 지연을 모니터링할 수 있으며 X초 이상 지연된 인스턴스의 데이터가 제공되지 않도록 구성할 수 있다.
 
-For a true snapshot, queries must be sent to the master within a transaction. For read-after-write consistency, reading from the master without a transaction is sufficient.
-
-실제 스냅샷을 보려면 트랜잭션 내에서 마스터에 쿼리해야 한다. 읽기 후 쓰기(read-after-write) 일관성을 위해서는 트랜잭션 없이 마스터에서 읽는 것으로 충분하다.
+실제 스냅샷 데이터를 보려면 트랜잭션 내에서 마스터에 쿼리해야 한다. 읽기 후 쓰기(read-after-write) 일관성을 위해서는 트랜잭션 없이 마스터에서 읽는 것으로 충분하다.
 
 요약하면 다음과 같은 다양한 수준의 일관성이 지원된다.
 
-* `REPLICA/RDONLY` read: Servers can be scaled geographically. Local reads are fast, but can be stale depending on replica lag.
-* `MASTER` read: There is only one worldwide master per shard. Reads coming from remote locations will be subject to network latency and reliability, but the data will be up-to-date (read-after-write consistency). The isolation level is `READ_COMMITTED`.
-* `MASTER` transactions: These exhibit the same properties as MASTER reads. However, you get REPEATABLE_READ consistency and ACID writes for a single shard. Support is underway for cross-shard Atomic transactions.
+* Replica/RDONLY Read: 서버를 지리적으로 확장할 수 있다. 로컬 읽기는 빠르지만 복제지연 따라 오래된 데이터일 수 있다.
 
-* "Replica/RDONLY" 읽기: 서버를 지리적으로 확장할 수 있다. 로컬 읽기는 빠르지만 복제본 지연에 따라 오래된 것일 수 있다.
-* '마스터' 읽기: 세계적인 거장 한 명당 단 한 명뿐입니다. 원격 위치에서 전송되는 읽기는 네트워크 지연 시간 및 신뢰성의 영향을 받지만 데이터는 최신(읽기 후 쓰기 일관성)이 될 것이다. 격리 수준은 'READ'이다.커밋됨.
-* '마스터' 트랜잭션: 이것들은 MASTER 읽기와 동일한 속성을 나타낸다. 단, 단일 샤드에 대해 REFITABLE_READ 일관성과 AID 쓰기를 얻을 수 있다. 크로스 샤드 아토믹 거래에 대한 지원이 진행 중이다.
+* Master Read: 샤드당 단 하나의 Master만 존재한다. 지리적으로 먼 위치에서의 읽기는 지연시간 과 네트워크 신뢰성의 영향을 받지만 데이터는 최신(읽기 후 쓰기 일관성)이 될 것이다. 격리 수준은 READ_COMMITTED이다.
+
+* Master Transaction: 외부적으로 MASTER 읽기와 동일한 속성을 가진다. 단, 단일 샤드에 대해 REFITABLE_READ 일관성과 ACID 쓰기를 보장 받을 수 있다. 크로스-샤드 원자성(Atomicity)를 위한 지원이 개발중이다.
 
 원자성에 대해서는 다음과 같은 수준이 지원된다.
 
-* '싱글': 멀티 db 트랜잭션 허용 안 함
-* '멀티(Multi)': 최선의 노력을 다하는 멀티 db 트랜잭션 커밋.
-* 'TWOPC' : 2PC 커밋을 이용한 멀티 db 트랜잭션
+* SINGLE : 멀티-DB 트랜잭션을 허용하지 않음
+* MULTI : Best-Effort 1PC 방식의 멀티 db 트랜잭션 커밋.
+* TWOPC : 2PC 커밋 방식의 멀티 db 트랜잭션
+
+### 멀티 마스터는 없음
+
+Vitess는 멀티 마스터 설정을 지원하지 않는다. 그러나 Vitess는 멀티 마스터 설정이 해결하는 대부분의 use-case를 다루는 다른 방법을 가진다.
+
+* 확장가능성: 멀티 마스터가 당신에게 약간의 추가적인 이점을 주는 상황이 있다. 하지만, 쿼리들이 결국은 모든 마스터들에게 적용되어야 하기 때문에, 그것은 지속 가능한 전략이 아니다. Vitess는 무한히 확장 가능한 샤딩을 통해 이 문제를 해결한다.
+* 고가용성: Vitess는 오케스트레이터와 통합되어 장애 감지 후 몇 초 이내에 새 마스터로의 페일오버를 수행할 수 있다. 이것은 대부분의 응용엔 충분하다.
+* 지연시간이 짧은, 지리적으로 분산된 쓰기: 이것은 Vitess 다루지 않은 또 하나의 사례이다. 현재 추천하는 방식은 장거리로 인한 네트워크 지연을 줄이는 것이다. 만약 데이터 분포가 이를 허용한다면, 지리적 인접도에 따른 샤딩 옵션을 사용할 수 있다. 그런 다음 다른 샤드의 마스터가 다른 지리적 위치에 있도록 설정할 수 있다. 이런 식으로 하면, 마스터 쓰기의 대부분은 여전히 지역적일 수 있다.
 
 
-As for atomicity, the following levels are supported:
+## 멀티 셀(Multi-Cell)
 
-* `SINGLE`: disallow multi-db transactions.
-* `MULTI`: multi-db transactions with best effort commit.
-* `TWOPC`: multi-db transactions with 2PC commit.
+Vitess는 여러 데이터 센터/지역/셀에서 실행하도록 만들어졌다. 이 부분에서는 가까워서 서로 같은 지역적 가용성을 공유하는 서버들의 집합을 가리켜 "셀"이라는 용어로 부를 것이다.
 
-### No multi-master
+셀에는 일반적으로 Vitess 클러스터를 사용하는 테이블, vtgate, 그리고 이를 사용하는 응용 서버들이 포함되어 있다. Vitess를 사용하면 모든 구성 요소를 필요에 따라 구성하고 가져올 수 있다.
 
-Vitess doesn’t support multi-master setup. It has alternate ways of addressing most of the use cases that are typically solved by multi-master:
+* 샤드의 마스터는 어떤 셀에도 있을 수 있다. 마스터로의 크로스-셀 접근이 필요한 경우 (마스터가 들어 있는 셀을 넘겨주도록) 쉽게 vtgate를 설정할 수 있다.
+* 마스터를 포함할 수 있는 셀을 읽기 전용 셀보다 더 많이 프로비저닝하는 것은 흔한 일이다. 이러한 *마스터를 가질 수 있는* 셀은 일어날 수 있는 페일오버를 대비하면서도 동일한 레플리카 가용량을 유지하기 위해 하나의 레플리카가 더 필요할 수 있다.
+* 한 셀의 마스터에서 다른 셀의 마스터로 페일오버하는 것은 로컬 페일오버와 다르지 않다. 이는 트래픽과 응답 시간에 영향을 미치지만 애플리케이션 트래픽 또한 새로운 셀로 다시 방향을 바꾸면 최종 결과는 안정적이다.
+* 한 세포에 주인의 파편이 있는 파편이 있고, 다른 세포에 주인의 파편이 있는 파편이 있는 것도 가능하다. vtgate는 원격 액세스에서만 추가 지연 비용을 발생시켜 트래픽을 올바른 위치로 라우팅할 뿐이다. 예를 들어 미국 마스터가 있는 데이터베이스에 미국 사용자 레코드를 만들고 유럽 마스터가 있는 데이터베이스에 유럽 사용자 레코드를 만드는 것은 쉬운 일이다. 복제본은 모든 셀에 존재할 수 있으며, 복제본 트래픽을 신속하게 처리할 수 있다.
 
-* Scalability: There are situations where multi-master gives you a little bit of additional runway. However, since the statements have to eventually be applied to all masters, it’s not a sustainable strategy. Vitess addresses this problem through sharding, which can scale indefinitely.
-* High availability: Vitess integrates with Orchestrator, which is capable of performing a failover to a new master within seconds of failure detection. This is usually sufficient for most applications.
-* Low-latency geographically distributed writes: This is one case that is not addressed by Vitess. The current recommendation is to absorb the latency cost of long-distance round-trips for writes. If the data distribution allows, you still have the option of sharding based on geographic affinity. You can then setup masters for different shards to be in different geographic location. This way, most of the master writes can still be local.
-
-## Multi-cell
-
-Vitess is meant to run in multiple data centers / regions / cells. In this part, we'll use "cell" to mean a set of servers that are very close together, and share the same regional availability.
-
-A cell typically contains a set of tablets, a vtgate pool, and app servers that use the Vitess cluster. With Vitess, all components can be configured and brought up as needed:
-
-* The master for a shard can be in any cell. If cross-cell master access is required, vtgate can be configured to do so easily (by passing the cell that contains the master as a cell to watch).
-* It is not uncommon to have the cells that can contain the master be more provisioned than read-only serving cells. These *master-capable* cells may need one more replica to handle a possible failover, while still maintaining the same replica serving capacity.
-* Failing over from a master in one cell to a master in a different cell is no different than a local failover. It has an implication on traffic and latency, but if the application traffic also gets re-directed to the new cell, the end result is stable.
 * It is also possible to have some shards with a master in one cell, and some other shards with their master in another cell. vtgate will just route the traffic to the right place, incurring extra latency cost only on the remote access. For instance, creating U.S. user records in a database with masters in the U.S. and European user records in a database with masters in Europe is easy to do. Replicas can exist in every cell anyway, and serve the replica traffic quickly.
 * Replica serving cells are a good compromise to reduce user-visible latency: they only contain replica servers, and master access is always done remotely. If the application profile is mostly reads, this works really well.
 * Not all cells need `rdonly` (or batch) instances. Only the cells that run batch jobs, or OLAP jobs, really need them.
